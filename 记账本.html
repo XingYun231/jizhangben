@@ -235,6 +235,22 @@ table.prev .in{color:var(--good)}
 .dlegend .dv{font-variant-numeric:tabular-nums;flex:none}
 .dlegend .dp{width:44px;text-align:right;color:var(--muted);font-size:12px;flex:none}
 
+/* 流水多选 */
+.selbar{
+  position:fixed;left:50%;transform:translateX(-50%);bottom:18px;z-index:70;
+  display:flex;align-items:center;gap:10px;background:var(--surface);color:var(--ink);
+  border:1px solid var(--ring);border-radius:14px;padding:10px 14px;
+  box-shadow:0 8px 28px rgba(0,0,0,.16);max-width:92vw;flex-wrap:wrap;justify-content:center;
+}
+.selcount{font-size:13px;color:var(--ink2);white-space:nowrap;}
+.txrow .ck{
+  width:22px;height:22px;border-radius:6px;border:1.5px solid var(--axis);flex:0 0 auto;
+  display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;
+  color:transparent;user-select:none;
+}
+.txrow.sel .ck{background:var(--accent);border-color:var(--accent);color:#fff;}
+.txrow.sel{background:var(--chip);border-radius:10px;}
+#selDel[disabled]{opacity:.5;}
 /* 悬浮按钮(手机) */
 .fab{
   display:none;position:fixed;right:20px;bottom:24px;width:58px;height:58px;border-radius:50%;
@@ -313,11 +329,16 @@ table.prev .in{color:var(--good)}
         <option value="manual">手动记录</option>
       </select>
       <span class="catchip" id="catChip"></span>
+      <button class="btn" id="btnSel" type="button" style="padding:4px 12px;font-size:13px">多选</button>
     </div>
     <div id="listArea"></div>
   </section>
 
   <section id="viewCharts" hidden>
+    <div class="card" style="padding:10px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <span class="sub" style="margin:0">把本页图表导出成一张 PNG 图片保存到本地</span>
+      <button class="btn primary" id="btnChartPng" type="button">导出图表PNG</button>
+    </div>
     <div class="card">
       <h2 id="trendTitle">近6个月收支</h2>
       <div class="sub">每月支出与收入对比</div>
@@ -349,6 +370,12 @@ table.prev .in{color:var(--good)}
 <button class="fab" id="fabAdd" aria-label="记一笔">＋</button>
 <div class="chart-tip" id="chartTip"></div>
 <div id="toast"></div>
+<div class="selbar" id="selBar" hidden>
+  <button class="btn" id="selAll" type="button">全选</button>
+  <span class="selcount" id="selCount">已选 0 笔</span>
+  <button class="btn" id="selCancel" type="button">退出</button>
+  <button class="btn danger" id="selDel" type="button">删除所选</button>
+</div>
 
 <!-- 记一笔 / 编辑 -->
 <dialog id="dlgEdit">
@@ -544,7 +571,8 @@ function toast(msg){
 /* ================= 数据存储 ================= */
 var state={ txs:[], month:null, tab:'list', typeF:'all', srcF:'all', catF:null,
             editingId:null, editType:'expense',
-            impItems:[], impSkipped:0 };
+            impItems:[], impSkipped:0,
+            selMode:false, selIds:{} };
 function loadStore(){
   try{
     var raw=localStorage.getItem(STORE_KEY);
@@ -992,6 +1020,7 @@ function renderStats(){
 function renderList(){
   var area=$('listArea');
   var txs=currentFilterTx();
+  if(state.selMode) updateSelBar();
   txs.sort(function(a,b){
     if(a.d!==b.d) return a.d>b.d?-1:1;
     return (b.t||'')>(a.t||'')?1:((b.t||'')===(a.t||'')?0:-1);
@@ -1026,8 +1055,10 @@ function renderList(){
       var t2=gr.rows[k],isIn=t2.type==='income';
       var title=t2.name||t2.desc||catName(t2);
       var sub=catGlyph(t2.cat,t2.type)+' '+esc(t2.cat)+(t2.account?' · '+esc(t2.account):'');
-      html+='<div class="txrow" data-id="'+esc(t2.id)+'">'+
-        '<div class="glyph">'+catGlyph(t2.cat,t2.type)+'</div>'+
+      html+='<div class="txrow'+(state.selMode&&state.selIds[t2.id]?' sel':'')+'" data-id="'+esc(t2.id)+'">'+
+        (state.selMode
+          ?'<div class="ck">✓</div>'
+          :'<div class="glyph">'+catGlyph(t2.cat,t2.type)+'</div>')+
         '<div class="mid"><div class="t1">'+esc(title)+'<span class="srctag">'+SRC_LABEL[t2.source]+'</span></div>'+
         '<div class="t2">'+sub+'</div></div>'+
         '<div class="amt'+(isIn?' in':'')+'">'+(isIn?'+':'-')+fmtMoney(t2.amountCents)+'</div></div>';
@@ -1491,7 +1522,15 @@ function switchTab(name){
       return;
     }
     var row=e.target.closest('.txrow');
-    if(row) openEdit(row.getAttribute('data-id'));
+    if(!row) return;
+    var rid=row.getAttribute('data-id');
+    if(state.selMode){
+      if(state.selIds[rid]) delete state.selIds[rid]; else state.selIds[rid]=true;
+      row.classList.toggle('sel',!!state.selIds[rid]);
+      updateSelBar();
+      return;
+    }
+    openEdit(rid);
   });
   var rt=null;
   window.addEventListener('resize',function(){
@@ -1812,6 +1851,222 @@ function exportPdf(){
 (function bindExport(){
   $('btnExport').addEventListener('click',exportPdf);
 })();
+
+/* ================= 流水多选批量删除 ================= */
+function selectedCount(selIds){
+  var n=0,k;
+  for(k in selIds){ if(selIds.hasOwnProperty(k)&&selIds[k]) n++; }
+  return n;
+}
+function updateSelBar(){
+  var n=0,vis=currentFilterTx(),i,allOn=vis.length>0;
+  for(i=0;i<vis.length;i++){
+    if(state.selIds[vis[i].id]) n++;
+    else allOn=false;
+  }
+  $('selCount').textContent='已选 '+n+' 笔';
+  $('selDel').disabled=(n===0);
+  $('selAll').textContent=allOn?'全不选':'全选';
+}
+function setSelMode(on){
+  state.selMode=on;
+  if(!on) state.selIds={};
+  $('selBar').hidden=!on;
+  $('btnSel').textContent=on?'退出多选':'多选';
+  $('fabAdd').hidden=on;
+  renderList();
+}
+(function bindSel(){
+  $('btnSel').addEventListener('click',function(){ setSelMode(!state.selMode); });
+  $('selCancel').addEventListener('click',function(){ setSelMode(false); });
+  $('selAll').addEventListener('click',function(){
+    var vis=currentFilterTx(),i,allOn=vis.length>0;
+    for(i=0;i<vis.length;i++){ if(!state.selIds[vis[i].id]){ allOn=false; break; } }
+    if(allOn){ for(i=0;i<vis.length;i++) delete state.selIds[vis[i].id]; }
+    else{ for(i=0;i<vis.length;i++) state.selIds[vis[i].id]=true; }
+    renderList();
+  });
+  $('selDel').addEventListener('click',function(){
+    var n=selectedCount(state.selIds);
+    if(!n){ toast('先勾选要删除的记录'); return; }
+    if(!confirm('确定删除选中的 '+n+' 笔记录吗?删除后无法撤销(提前备份可在恢复里找回)。')) return;
+    state.txs=state.txs.filter(function(t){ return !state.selIds[t.id]; });
+    saveStore(); setSelMode(false); renderAll();
+    toast('已删除 '+n+' 笔');
+  });
+})();
+
+/* ================= 图表导出PNG ================= */
+function replVar(value,getter){
+  return String(value).replace(/var\(\s*(--[\w-]+)\s*\)/g,function(m,nm){
+    var v=getter(nm);
+    return (v==null)?'':v;
+  });
+}
+function cssVar(name){
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+function cloneSvgResolved(svg){
+  var clone=svg.cloneNode(true),src=svg.querySelectorAll('*'),dst=clone.querySelectorAll('*'),i,j;
+  clone.setAttribute('xmlns','http://www.w3.org/2000/svg');
+  for(i=0;i<dst.length;i++){
+    var attrs=dst[i].attributes;
+    for(j=0;j<attrs.length;j++){
+      var v=attrs[j].value;
+      if(v.indexOf('var(')<0) continue;
+      var cs=getComputedStyle(src[i]),resolved='';
+      if(attrs[j].name==='fill') resolved=cs.fill;
+      else if(attrs[j].name==='stroke') resolved=cs.stroke;
+      else resolved=replVar(v,function(nm){ return cs.getPropertyValue(nm).trim(); });
+      if(resolved&&resolved.indexOf('var(')<0) dst[i].setAttribute(attrs[j].name,resolved);
+    }
+  }
+  return clone;
+}
+function svgToImage(svg){
+  return new Promise(function(resolve,reject){
+    var xml=new XMLSerializer().serializeToString(cloneSvgResolved(svg));
+    var blob=new Blob([xml],{type:'image/svg+xml;charset=utf-8'});
+    var url=URL.createObjectURL(blob),img=new Image();
+    img.onload=function(){ URL.revokeObjectURL(url); resolve(img); };
+    img.onerror=function(){ URL.revokeObjectURL(url); reject(new Error('SVG 渲染失败')); };
+    img.src=url;
+  });
+}
+function catBarsData(){
+  var txs=monthTx(state.month),by={},i;
+  for(i=0;i<txs.length;i++){
+    if(txs[i].type!=='expense') continue;
+    var c=txs[i].cat||'其他支出';
+    by[c]=(by[c]||0)+txs[i].amountCents;
+  }
+  var arr=[];
+  for(var k in by){ if(by.hasOwnProperty(k)) arr.push([k,by[k]]); }
+  arr.sort(function(a,b){ return b[1]-a[1]; });
+  return arr;
+}
+function drawRoundBar(ctx,x,y,w,h,r){
+  var rr=Math.min(r,h/2,w/2);
+  ctx.beginPath();
+  ctx.moveTo(x+rr,y);
+  ctx.lineTo(x+w-rr,y); ctx.arcTo(x+w,y,x+w,y+rr,rr);
+  ctx.lineTo(x+w,y+h-rr); ctx.arcTo(x+w,y+h,x+w-rr,y+h,rr);
+  ctx.lineTo(x+rr,y+h); ctx.arcTo(x,y+h,x,y+h-rr,rr);
+  ctx.lineTo(x,y+rr); ctx.arcTo(x,y,x+rr,y,rr);
+  ctx.closePath(); ctx.fill();
+}
+function exportChartsPng(){
+  var secs=[
+    {title:$('trendTitle').textContent,sub:'每月支出与收入对比',svg:$('trendChart').querySelector('svg')},
+    {title:$('dailyTitle').textContent,sub:$('dailySub').textContent,svg:$('dailyChart').querySelector('svg')},
+    {title:$('donutTitle').textContent,sub:'按分类占比',svg:$('donutBox').querySelector('svg'),
+     legend:$('donutBox').querySelectorAll('.dl')},
+    {title:$('catTitle').textContent,sub:'按分类金额排序',bars:catBarsData()}
+  ];
+  if(!secs[0].svg&&!secs[1].svg&&!secs[2].svg&&!secs[3].bars.length){
+    toast('暂无可导出的图表,先记一笔或导入账单吧'); return;
+  }
+  var jobs=[],i;
+  for(i=0;i<secs.length;i++){
+    (function(sec){
+      if(sec.svg) jobs.push(svgToImage(sec.svg).then(function(img){ sec.img=img; }));
+    })(secs[i]);
+  }
+  Promise.all(jobs).then(function(){
+    var SCALE=2,M=28,F='system-ui,-apple-system,"Segoe UI",sans-serif';
+    var W=560;
+    for(i=0;i<secs.length;i++){ if(secs[i].img) W=Math.max(W,secs[i].img.width); }
+    W+=M*2;
+    var headH=88,y=headH,tops=[];
+    for(i=0;i<secs.length;i++){
+      var sec=secs[i],h=0;
+      if(sec.img) h=Math.max(h,sec.img.height);
+      if(sec.legend&&sec.legend.length) h=Math.max(h,sec.legend.length*24);
+      if(sec.bars&&sec.bars.length) h=Math.max(h,sec.bars.length*30);
+      if(h>0){ tops.push(y); y+=48+h+28; }
+      else tops.push(null);
+    }
+    var H=y+M-28+M;
+    var cv=document.createElement('canvas');
+    cv.width=Math.round(W*SCALE); cv.height=Math.round(H*SCALE);
+    var ctx=cv.getContext('2d'); ctx.scale(SCALE,SCALE);
+    var ink=cssVar('--ink')||'#0b0b0b',ink2=cssVar('--ink2')||'#52514e',muted=cssVar('--muted')||'#898781';
+    ctx.fillStyle=cssVar('--surface')||'#fcfcfb';
+    ctx.fillRect(0,0,W,H);
+    ctx.textBaseline='alphabetic'; ctx.textAlign='left';
+    var p=state.month.split('-');
+    ctx.fillStyle=ink; ctx.font='700 20px '+F;
+    ctx.fillText('我的账本 · '+(+p[0])+'年'+(+p[1])+'月 图表统计',M,42);
+    var s=sums(monthTx(state.month));
+    ctx.fillStyle=muted; ctx.font='12px '+F;
+    ctx.fillText('支出 '+fmtMoney(s.out)+' · 收入 '+fmtMoney(s.inc)+' · 生成于 '+todayStr(),M,64);
+    ctx.strokeStyle=cssVar('--grid')||'#e1e0d9'; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(M,76); ctx.lineTo(W-M,76); ctx.stroke();
+    for(i=0;i<secs.length;i++){
+      var sec2=secs[i];
+      if(tops[i]==null) continue;
+      var sy=tops[i];
+      ctx.fillStyle=ink; ctx.font='600 15px '+F;
+      ctx.fillText(sec2.title,M,sy+18);
+      if(sec2.sub){
+        ctx.fillStyle=muted; ctx.font='12px '+F;
+        ctx.fillText(sec2.sub,M,sy+36);
+      }
+      var top=sy+48;
+      if(sec2.img) ctx.drawImage(sec2.img,M,top);
+      if(sec2.legend&&sec2.legend.length){
+        var ly=top+10,swX=M+220;
+        Array.prototype.forEach.call(sec2.legend,function(rowEl){
+          var sw=rowEl.querySelector('.sw'),dn=rowEl.querySelector('.dn'),
+              dv=rowEl.querySelector('.dv'),dp=rowEl.querySelector('.dp');
+          if(!dn||!dv||!dp) return;
+          var col=sw?getComputedStyle(sw).backgroundColor:(cssVar('--cat1')||'#2a78d6');
+          ctx.fillStyle=col; drawRoundBar(ctx,swX,ly-10,12,12,3);
+          ctx.fillStyle=ink2; ctx.font='12px '+F;
+          ctx.fillText(dn.textContent,swX+20,ly);
+          ctx.fillStyle=ink; ctx.textAlign='right';
+          ctx.fillText(dv.textContent+'('+dp.textContent+')',W-M,ly);
+          ctx.textAlign='left';
+          ly+=24;
+        });
+      }
+      if(sec2.bars&&sec2.bars.length){
+        var tot=0,j;
+        for(j=0;j<sec2.bars.length;j++) tot+=sec2.bars[j][1];
+        var maxB=sec2.bars[0][1]||1,by=top,nameW=130,barX=M+nameW,barW=W-M*2-nameW-160;
+        var track=cssVar('--btrack')||'#cde2fb',barc=cssVar('--s1')||'#2a78d6';
+        for(j=0;j<sec2.bars.length;j++){
+          ctx.fillStyle=ink2; ctx.font='12px '+F;
+          ctx.fillText(sec2.bars[j][0],M,by+16);
+          ctx.fillStyle=track; drawRoundBar(ctx,barX,by+3,barW,14,4);
+          if(sec2.bars[j][1]>0){
+            ctx.fillStyle=barc;
+            drawRoundBar(ctx,barX,by+3,Math.max(8,barW*sec2.bars[j][1]/maxB),14,4);
+          }
+          ctx.fillStyle=ink; ctx.textAlign='right';
+          ctx.fillText(fmtMoney(sec2.bars[j][1]),W-M-56,by+16);
+          ctx.fillStyle=muted;
+          ctx.fillText((tot?Math.round(sec2.bars[j][1]/tot*100):0)+'%',W-M,by+16);
+          ctx.textAlign='left';
+          by+=30;
+        }
+      }
+    }
+    cv.toBlob(function(b){
+      if(!b){ toast('导出失败,浏览器不支持'); return; }
+      var a=document.createElement('a'),url=URL.createObjectURL(b);
+      a.href=url; a.download='记账图表_'+state.month+'.png';
+      document.body.appendChild(a); a.click();
+      setTimeout(function(){ URL.revokeObjectURL(url); a.remove(); },4000);
+      toast('已导出:记账图表_'+state.month+'.png');
+    },'image/png');
+  }).catch(function(e){
+    toast('图表导出失败:'+((e&&e.message)||e));
+  });
+}
+(function bindChartPng(){
+  $('btnChartPng').addEventListener('click',exportChartsPng);
+})();
 function restoreFromText(text){
   var o;
   try{ o=JSON.parse(text); }catch(e){ toast('备份文件格式错误'); return; }
@@ -1982,6 +2237,10 @@ function runSelftest(){
   ddo=donutData(darr);
   T('环形:超过6类折叠',ddo.slices.length===6&&ddo.otherCents===200&&ddo.foldCount===2,
     ddo.slices.length+'/'+ddo.otherCents+'/'+ddo.foldCount);
+  T('多选:选中计数',selectedCount({a:true,b:false,c:true})===2,String(selectedCount({a:true,b:false,c:true})));
+  var rg=function(n){ return n==='--x1'?'#fff':''; };
+  T('replVar:替换变量',replVar('a var(--x1) b',rg)==='a #fff b',replVar('a var(--x1) b',rg));
+  T('replVar:取不到置空',replVar('x var(--zz) y',rg)==='x  y',replVar('x var(--zz) y',rg));
   var title=fail?('SELFTEST FAIL '+fail+'/'+(pass+fail)):('SELFTEST PASS '+pass+'/'+(pass+fail));
   document.title=title;
   document.body.innerHTML='<pre id="selftest-out" style="white-space:pre-wrap;font:13px/1.7 monospace;padding:20px">'+
