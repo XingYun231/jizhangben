@@ -1888,6 +1888,11 @@ function exportPdf(){
       '<td>'+esc(rows[i][8])+'</td><td>'+esc(rows[i][9])+'</td></tr>';
   }
   html+='</table></body></html>';
+  if(window.AndroidPrint){
+    try{ AndroidPrint.print(html); toast('已打开系统打印,选择「保存为PDF」即可导出'); }
+    catch(e){ toast('打印失败:'+((e&&e.message)||e)); }
+    return;
+  }
   var f=document.createElement('iframe');
   f.style.cssText='position:fixed;right:0;bottom:0;width:0;height:0;border:0';
   document.body.appendChild(f);
