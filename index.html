@@ -57,16 +57,44 @@ h1{font-size:20px;margin:0;font-weight:650}
 .btn.primary{background:var(--accent);color:var(--accent-ink);border-color:transparent;box-shadow:0 1px 6px rgba(42,120,214,.25)}
 .btn.primary:hover{background:var(--accent);filter:brightness(1.07)}
 
-/* 月份切换 */
-.monthbar{display:flex;align-items:center;gap:8px;margin:14px 0 10px}
-.monthbar .mlabel{font-size:17px;font-weight:650;min-width:104px;text-align:center}
-.monthbar button{
+/* 月份切换:点击选月 */
+.monthbar{display:flex;align-items:center;gap:8px;margin:14px 0 10px;position:relative}
+.monthbar>button{
   border:1px solid var(--ring);background:var(--surface);border-radius:9px;
-  min-width:34px;height:32px;line-height:1;
+  height:32px;line-height:1;
   transition:border-color .15s,background .15s;
 }
-.monthbar button:hover{border-color:var(--axis);background:var(--chip)}
+.monthbar>button:hover{border-color:var(--axis);background:var(--chip)}
+.monthbar .mpick{display:inline-flex;align-items:center;gap:7px;padding:0 14px;font-size:15px;font-weight:650}
+.monthbar .mpick .caret{font-size:10px;color:var(--muted);margin-top:2px}
 .monthbar .today{padding:0 10px;width:auto;font-size:13px}
+/* 选月弹层 */
+.mpop{
+  position:absolute;top:calc(100% + 6px);left:0;z-index:60;width:272px;
+  background:var(--surface);border:1px solid var(--ring);border-radius:12px;
+  box-shadow:0 8px 24px rgba(0,0,0,.14);padding:10px;
+}
+.mpop-y{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.mpop-y span{font-size:14px;font-weight:650}
+.mpop-y button{
+  border:1px solid var(--ring);background:var(--surface);border-radius:7px;
+  min-width:26px;height:26px;line-height:1;transition:border-color .15s,background .15s;
+}
+.mpop-y button:hover{border-color:var(--axis);background:var(--chip)}
+.mpop-m{display:grid;grid-template-columns:repeat(4,1fr);gap:4px}
+.mpop-m button{
+  position:relative;border:1px solid transparent;background:transparent;border-radius:8px;
+  padding:7px 0;font-size:13px;color:var(--ink2);transition:background .15s,color .15s;
+}
+.mpop-m button:hover{background:var(--chip);color:var(--ink)}
+.mpop-m button.cur{color:var(--ink);font-weight:600;box-shadow:inset 0 0 0 1px var(--ring)}
+.mpop-m button.sel{background:var(--accent);color:var(--accent-ink);font-weight:600}
+.mpop-m button.sel:hover{background:var(--accent);color:var(--accent-ink)}
+.mpop-m .dot{
+  position:absolute;left:50%;bottom:3px;width:4px;height:4px;margin-left:-2px;
+  border-radius:50%;background:var(--muted);
+}
+.mpop-m button.sel .dot{background:var(--accent-ink)}
 
 /* 汇总卡片 */
 .tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
@@ -329,10 +357,18 @@ table.prev .in{color:var(--good)}
     </div>
   </div>
   <div class="monthbar">
-    <button id="mPrev" aria-label="上个月">‹</button>
-    <div class="mlabel" id="mLabel">—</div>
-    <button id="mNext" aria-label="下个月">›</button>
+    <button class="mpick" id="mPick" aria-haspopup="true" aria-expanded="false">
+      <span id="mLabel">—</span><span class="caret">▾</span>
+    </button>
     <button class="today" id="mToday">回到本月</button>
+    <div class="mpop" id="mPop" hidden>
+      <div class="mpop-y">
+        <button type="button" id="mpPrev" aria-label="上一年">‹</button>
+        <span id="mpYear">—</span>
+        <button type="button" id="mpNext" aria-label="下一年">›</button>
+      </div>
+      <div class="mpop-m" id="mpMonths"></div>
+    </div>
   </div>
   <div class="tiles">
     <div class="tile"><div class="tlabel">本月收入</div><div class="tvalue pos" id="tIn">¥0.00</div></div>
@@ -1535,14 +1571,58 @@ function switchTab(name){
   $('viewList').hidden=name!=='list';
   $('viewCharts').hidden=name!=='charts';
 }
+/* ---- 选月弹层 ---- */
+var mpYear=0;
+function monthsWithData(){
+  var s={},i;
+  for(i=0;i<state.txs.length;i++) s[state.txs[i].d.slice(0,7)]=true;
+  return s;
+}
+function renderMonthPop(){
+  var has=monthsWithData(),cur=monthNow(),sel=state.month,h='',i,m;
+  $('mpYear').textContent=mpYear+'年';
+  for(i=1;i<=12;i++){
+    m=mpYear+'-'+pad2(i);
+    h+='<button type="button" data-m="'+m+'" class="'+(m===sel?'sel':(m===cur?'cur':''))+'">'+
+       i+'月'+(has[m]?'<span class="dot"></span>':'')+'</button>';
+  }
+  $('mpMonths').innerHTML=h;
+}
+function openMonthPop(){
+  mpYear=+state.month.split('-')[0];
+  renderMonthPop();
+  $('mPop').hidden=false;
+  $('mPick').setAttribute('aria-expanded','true');
+}
+function closeMonthPop(){
+  $('mPop').hidden=true;
+  $('mPick').setAttribute('aria-expanded','false');
+}
 (function bindNav(){
   $('tabs').addEventListener('click',function(e){
     var b=e.target.closest('button');
     if(b) switchTab(b.getAttribute('data-tab'));
     if(state.tab==='charts') renderAll();
   });
-  $('mPrev').addEventListener('click',function(){ state.month=prevMonth(state.month); renderAll(); });
-  $('mNext').addEventListener('click',function(){ state.month=nextMonthOf(state.month); renderAll(); });
+  $('mPick').addEventListener('click',function(){
+    if($('mPop').hidden) openMonthPop(); else closeMonthPop();
+  });
+  $('mpPrev').addEventListener('click',function(){ mpYear--; renderMonthPop(); });
+  $('mpNext').addEventListener('click',function(){ mpYear++; renderMonthPop(); });
+  $('mpMonths').addEventListener('click',function(e){
+    var b=e.target.closest('button[data-m]'); if(!b) return;
+    state.month=b.getAttribute('data-m');
+    closeMonthPop();
+    renderAll();
+  });
+  document.addEventListener('click',function(e){
+    if($('mPop').hidden) return;
+    if(e.target&&e.target.closest&&e.target.closest('#mPop,#mPick')) return;
+    closeMonthPop();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape') closeMonthPop();
+  });
   $('mToday').addEventListener('click',function(){ state.month=monthNow(); renderAll(); });
   $('typeChips').addEventListener('click',function(e){
     var b=e.target.closest('button'); if(!b) return;
@@ -2231,6 +2311,8 @@ function runSelftest(){
               name:'肯德基',desc:'早餐',txId:'10001',cat:'餐饮'}];
   var ds=buildDupSet();
   T('去重键生成',!!ds['id:10001'],JSON.stringify(Object.keys(ds)));
+  var mwd=monthsWithData();
+  T('选月:提取有数据的月份',mwd['2026-10']===true&&!mwd['2025-12'],JSON.stringify(Object.keys(mwd)));
   var s=sums([{type:'expense',amountCents:100},{type:'income',amountCents:250},{type:'expense',amountCents:50}]);
   T('收支汇总',s.inc===250&&s.out===150,s.inc+'/'+s.out);
   T('上个月跨年',prevMonth('2026-01')==='2025-12',prevMonth('2026-01'));
